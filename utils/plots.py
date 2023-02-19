@@ -107,6 +107,19 @@ class Annotator:
         # Add rectangle to image (PIL-only)
         self.draw.rectangle(xy, fill, outline, width)
 
+    def line(self, queue_line):
+        m, b = queue_line
+        x1 = 0
+        y1 = int(b * self.im.shape[0])
+        x2 = int(self.im.shape[1])
+        y2 = int(m * x2 + y1)
+        pt1 = (x1, y1)
+        pt2 = (x2, y2)
+        pt3 = (0,0)
+        cv2.line(self.im, pt1, pt2, (0, 0, 255), 5, cv2.LINE_AA)
+        
+
+
     def text(self, xy, text, txt_color=(255, 255, 255)):
         # Add text to image (PIL-only)
         w, h = self.font.getsize(text)  # text width, height

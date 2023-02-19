@@ -30,6 +30,7 @@ from utils.general import (LOGGER, apply_classifier, check_file, check_img_size,
                            scale_coords, strip_optimizer, xyxy2xywh)
 from utils.plots import Annotator, colors
 from utils.torch_utils import load_classifier, select_device, time_sync
+from utils.regression import QueueClassifier
 
 
 @torch.no_grad()
@@ -39,6 +40,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
         conf_thres=0.25,  # confidence threshold
         iou_thres=0.45,  # NMS IOU threshold
         max_det=1000,  # maximum detections per image
+        reg_threshold=1,
+        dis_threshold=1,
         device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
         view_img=False,  # show results
         save_txt=False,  # save results to *.txt
@@ -197,6 +200,8 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
             pred = apply_classifier(pred, modelc, img, im0s)
 
         # Process predictions
+        default_reg_line = [-0.12, 0.75]          # 줄 기본값
+        pre_reg_line = [-0.12, 0.75]
         for i, det in enumerate(pred):  # per image
             seen += 1
             if webcam:  # batch_size >= 1
@@ -222,9 +227,10 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
 
                 # Write results
+                xybox_list = []
                 for *xyxy, conf, cls in reversed(det):
+                    xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                     if save_txt:  # Write to file
-                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
                         line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
                         with open(txt_path + '.txt', 'a') as f:
                             f.write(('%g ' * len(line)).rstrip() % line + '\n')
@@ -232,9 +238,30 @@ def run(weights=ROOT / 'yolov5s.pt',  # model.pt path(s)
                     if save_img or save_crop or view_img:  # Add bbox to image
                         c = int(cls)  # integer class
                         label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
-                        annotator.box_label(xyxy, label, color=colors(c, True))
+                        #annotator.box_label(xyxy, label, color=colors(c, True))
                         if save_crop:
-                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
+                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)  
+                    
+                    if cls == 0:
+                        xybox_list.append(xywh[0:2] + xyxy)        # x,y center 값 + box 좌표
+                
+                if (det[:, -1] == 0).sum() != 0:
+                    xybox_list = np.array(xybox_list)
+                    xybox_list = xybox_list[xybox_list[:,0].argsort()]
+                    queue_classifier = QueueClassifier(xybox_list, pre_reg_line, default_reg_line, reg_threshold, dis_threshold)
+                    is_in_line = queue_classifier.classify_pedestrians()
+                    for j in range(len(xybox_list)):
+                        if is_in_line[j]:
+                            label = 'in_queue'
+                            annotator.box_label(xybox_list[j, 2:], label, color=(255, 255, 0))
+                        else:
+                            label = 'out queue'
+                            annotator.box_label(xybox_list[j, 2:], label, color=(0, 0, 0))
+                    queue_line = queue_classifier.queue_line()
+                    print(queue_line)
+                    annotator.line(queue_line)
+                                              
+                                        
 
             # Print time (inference-only)
             LOGGER.info(f'{s}Done. ({t3 - t2:.3f}s)')
@@ -282,6 +309,8 @@ def parse_opt():
     parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
     parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
+    parser.add_argument('--reg-threshold', type=float, default=1, help='threshold for classifing a queue line')
+    parser.add_argument('--dis-threshold', type=float, default=1, help='threshold for check end of the line')
     parser.add_argument('--device', default='', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
     parser.add_argument('--view-img', action='store_true', help='show results')
     parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
